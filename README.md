@@ -63,9 +63,9 @@ PLAYWRIGHT_BASE_URL=http://127.0.0.1:3001 pnpm test:e2e
 
 ```sh
 sha256sum -c SHA256SUMS
-docker load -i tongpin-v0.1.0-linux-amd64.docker.tar.gz
+docker load -i tongpin-v0.1.1-linux-amd64.docker.tar.gz
 docker run -d --name tongpin --restart unless-stopped \
-  -p 3001:3001 -v tongpin-data:/app/data tongpin:v0.1.0
+  -p 3001:3001 -v tongpin-data:/app/data tongpin:v0.1.1
 ```
 
 打开 `http://服务器地址:3001/`。上述包是可运行镜像；GitHub自动生成的Source code压缩包是源码，需要构建。其他架构可使用Dockerfile自行构建，本次不将Linux x86_64构建声明为全平台产物。
