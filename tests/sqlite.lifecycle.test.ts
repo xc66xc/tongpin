@@ -61,6 +61,24 @@ describe('SQLite 房间存储与过期生命周期', () => {
     expect(service.cleanup()).toHaveLength(1);
     expect(service.snapshot(active.identity, () => true).phase).toBe('waiting');
   });
+
+  it('旧版停在揭晓页的房间在合法重连后自动续轮，双方重连只前进一次且保留举手', () => {
+    const host = service.create();
+    const guest = service.join(host.credentials.roomCode);
+    // Reproduce persisted state from the former two-confirmation flow.
+    db.run("UPDATE rounds SET word_one = '大海', word_two = '沙滩', is_revealed = 1 WHERE rooms_id = ?", host.identity.roomId);
+    db.run("UPDATE rooms SET phase = 'revealed' WHERE id = ?", host.identity.roomId);
+    db.run('UPDATE players SET is_raised = 1, is_next_ready = 1 WHERE rooms_id = ? AND seat = 1', host.identity.roomId);
+    expect(() => service.resume(host.credentials.roomCode, 'wrong-token')).toThrow();
+    expect(service.snapshot(host.identity, () => false).roundNumber).toBe(1);
+    const restoredHost = service.resume(host.credentials.roomCode, host.credentials.token);
+    const first = service.snapshot(restoredHost, () => true);
+    expect(first).toMatchObject({ phase: 'playing', roundNumber: 2, history: [{ roundNumber: 1, words: ['大海', '沙滩'] }] });
+    expect(first.self).toMatchObject({ raised: true, nextReady: false, submitted: false });
+    const restoredGuest = service.resume(guest.credentials.roomCode, guest.credentials.token);
+    expect(service.snapshot(restoredGuest, () => true).roundNumber).toBe(2);
+    expect(db.one<{ count: number }>('SELECT count(*) AS count FROM rounds WHERE rooms_id = ?', host.identity.roomId)?.count).toBe(2);
+  });
 });
 
 it('已有无 revision 字段的 SQLite 房间可幂等升级，保留游戏数据与时间戳', async () => {

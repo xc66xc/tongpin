@@ -1,3 +1,4 @@
+/** 'revealed' is retained for rooms created before automatic advancement. */
 export type Phase = 'waiting' | 'playing' | 'revealed' | 'ended';
 export type EndReason = 'matched' | 'consensus' | null;
 export type Seat = 1 | 2;
@@ -28,6 +29,7 @@ export interface RoomSnapshot {
   history: RoundView[];
 }
 export interface Credentials { roomCode: string; token: string }
+/** 'next' is a legacy command: the server now advances mismatched rounds itself. */
 export type GameAction = 'submit' | 'next' | 'raise' | 'again';
 export type Command =
   | { action: 'create' }

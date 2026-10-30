@@ -57,13 +57,15 @@ test('两部手机完成提交、隐藏、刷新恢复、同词结束、重开�
     await expect(page.getByRole('button', { name: '你已举手，等待对方确认' })).toBeDisabled();
     await submitWord(page, '大海');
     await submitWord(guest, '沙滩');
-    await expect(page.getByRole('heading', { name: '离同频，又近了一点。' })).toBeVisible();
-    await expect(guest.getByRole('heading', { name: '离同频，又近了一点。' })).toBeVisible();
-    await page.getByRole('button', { name: '继续下一轮', exact: true }).click();
-    await expect(page.getByRole('button', { name: '已准备，等待对方' })).toBeDisabled();
-    await expect(guest.getByRole('heading', { name: '离同频，又近了一点。' })).toBeVisible();
-    await guest.getByRole('button', { name: '继续下一轮', exact: true }).click();
     await expect(page.getByText('第 02 轮', { exact: true })).toBeVisible();
+    await expect(guest.getByText('第 02 轮', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '继续下一轮', exact: true })).toHaveCount(0);
+    await expect(page.getByLabel('你的词', { exact: true })).toBeEnabled();
+    await expect(page.getByText('上一轮 · 第 01 轮已揭晓')).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('auto-next-mobile.png'), fullPage: true });
+    await page.reload();
+    await expect(page.getByText('第 02 轮', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('你的词', { exact: true })).toBeEnabled();
     await expect(page.getByRole('button', { name: '你已举手，等待对方确认' })).toBeDisabled();
     await submitWord(guest, '尚未揭晓的海浪');
     await expect(page.getByText('尚未揭晓的海浪', { exact: true })).toHaveCount(0);
@@ -117,7 +119,8 @@ test('词语输入限制和超长中文在小屏幕上保持可读', async ({ pa
     await expect(submit).toBeEnabled();
     await submit.click();
     await submitWord(guest, '风'.repeat(30));
-    await expect(page.getByRole('heading', { name: '离同频，又近了一点。' })).toBeVisible();
+    await expect(page.getByText('第 02 轮', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('你的词', { exact: true })).toBeEnabled();
     await expectNoHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath('long-words-320px.png'), fullPage: true });
   } finally {
@@ -139,8 +142,8 @@ test('手机离线后自动恢复已提交内容，双方同时举手不会回�
     await expect(page.getByText('等待对方提交，随后一起揭晓。')).toBeVisible();
     await expect(guest.getByText('双方在线', { exact: true })).toBeVisible();
     await submitWord(guest, '不同但接近的词');
-    await expect(page.getByRole('heading', { name: '离同频，又近了一点。' })).toBeVisible();
-    await expect(guest.getByRole('heading', { name: '离同频，又近了一点。' })).toBeVisible();
+    await expect(page.getByText('第 02 轮', { exact: true })).toBeVisible();
+    await expect(guest.getByText('第 02 轮', { exact: true })).toBeVisible();
     await Promise.all([
       page.getByRole('button', { name: /^举手结束/ }).click(),
       guest.getByRole('button', { name: /^举手结束/ }).click(),
@@ -169,7 +172,7 @@ test('结束快照先于旧操作确认到达时，界面仍保持结束状态',
       const ack = /^43\d+(\[.*)$/s.exec(message);
       if (ack) {
         const data = JSON.parse(ack[1]) as { ok?: boolean; snapshot?: { phase?: string; self?: { raised?: boolean } } }[];
-        if (data[0]?.ok && data[0].snapshot?.phase === 'revealed' && data[0].snapshot.self?.raised) {
+        if (data[0]?.ok && data[0].snapshot?.phase === 'playing' && data[0].snapshot.self?.raised) {
           delayedAck = message;
           return;
         }
@@ -190,7 +193,7 @@ test('结束快照先于旧操作确认到达时，界面仍保持结束状态',
     await transportReady;
     await submitWord(page, '海风');
     await submitWord(guest, '海边的风');
-    await expect(page.getByRole('heading', { name: '离同频，又近了一点。' })).toBeVisible();
+    await expect(page.getByText('第 02 轮', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: '举手结束', exact: true }).click();
     await expect(guest.getByText('对方举手了，觉得已经同频。')).toBeVisible();
     await guest.getByRole('button', { name: '举手结束 · 我也认同', exact: true }).click();
