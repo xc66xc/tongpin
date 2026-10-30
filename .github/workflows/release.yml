@@ -1,0 +1,67 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify annotated tag, version and main ancestry
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          test "$(git cat-file -t "refs/tags/$TAG")" = tag
+          node -e 'const p=require("./package.json"); if (process.env.TAG !== `v${p.version}`) throw new Error("Tag and package version differ")'
+          git merge-base --is-ancestor HEAD origin/main
+      - name: Build the exact tagged source for Linux x86_64
+        env:
+          TAG: ${{ github.ref_name }}
+        run: docker build --platform linux/amd64 --label org.opencontainers.image.revision="$GITHUB_SHA" -t "tongpin:$TAG" .
+      - name: Check packaged application startup
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          docker run -d --name tongpin-check -p 127.0.0.1:3001:3001 "tongpin:$TAG"
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3001/api/health > /tmp/tongpin-health.json; then break; fi
+            sleep 1
+          done
+          node -e 'if (require("/tmp/tongpin-health.json").status !== "ok") throw new Error("Application unhealthy")'
+          curl -fsS http://127.0.0.1:3001/ > /tmp/tongpin-index.html
+          grep -q '同频' /tmp/tongpin-index.html
+          docker rm -f tongpin-check
+      - name: Package runnable image and checksum
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p artifacts
+          docker save "tongpin:$TAG" | gzip > "artifacts/tongpin-$TAG-linux-amd64.docker.tar.gz"
+          (cd artifacts && sha256sum *.docker.tar.gz > SHA256SUMS)
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo 'Release already exists; inspect its state before retrying.'
+            exit 1
+          fi
+          cat > "$RUNNER_TEMP/tongpin-release.md" <<'NOTES'
+          双人手机网页默契对词游戏：房间邀请、同时揭晓、同词结束、双举手结束、历史记录、重新开始及断线恢复。
+
+          附件为从该Tag确切源码构建的 **Linux x86_64 Docker镜像**，已完成容器启动与健康检查。下载镜像及SHA256SUMS，按README校验并用docker load导入。SQLite数据请挂载持久卷；其他架构未在本次发布中验证。GitHub自动生成的Source code附件是源码，不是可运行安装包。
+          NOTES
+          gh release create "$TAG" artifacts/*.docker.tar.gz artifacts/SHA256SUMS --verify-tag --title "同频 $TAG" --notes-file "$RUNNER_TEMP/tongpin-release.md"
