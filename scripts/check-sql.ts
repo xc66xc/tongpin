@@ -18,7 +18,6 @@ try {
     for (let round = 1; round <= 20; round++) {
       for (const [identity, action, word] of [
         [host.identity, 'submit', '夏天'], [guest.identity, 'submit', '海边'],
-        [host.identity, 'next', undefined], [guest.identity, 'next', undefined],
       ] as const) {
         const start = performance.now();
         service.apply(identity, { action, gameNumber: 1, roundNumber: round, ...(word ? { word } : {}) });
@@ -43,5 +42,5 @@ try {
   const cleaned = service.cleanup();
   const cleanupMs = performance.now() - start;
   latencies.sort((a, b) => a - b);
-  process.stdout.write(JSON.stringify({ environment: { node: process.version, platform: process.platform, arch: process.arch }, workload: '100 rooms × 20 revealed rounds; 8000 apply+one-view-snapshot calls on local temporary SQLite WAL; excludes networking', counts, samples: latencies.length, p50Ms: latencies[Math.floor(latencies.length * .5)], p95Ms: latencies[Math.floor(latencies.length * .95)], maxMs: latencies.at(-1), checkpointedDatabaseBytes: bytes, cleanup: { rooms: cleaned.length, milliseconds: cleanupMs }, executionPlans, integrity: db.connection.pragma('integrity_check') }, null, 2) + '\n');
+  process.stdout.write(JSON.stringify({ environment: { node: process.version, platform: process.platform, arch: process.arch }, workload: '100 rooms × 20 automatically advanced rounds; 4000 apply+one-view-snapshot calls on local temporary SQLite WAL; excludes networking', counts, samples: latencies.length, p50Ms: latencies[Math.floor(latencies.length * .5)], p95Ms: latencies[Math.floor(latencies.length * .95)], maxMs: latencies.at(-1), checkpointedDatabaseBytes: bytes, cleanup: { rooms: cleaned.length, milliseconds: cleanupMs }, executionPlans, integrity: db.connection.pragma('integrity_check') }, null, 2) + '\n');
 } finally { db.close(); rmSync(directory, { recursive: true, force: true }); }

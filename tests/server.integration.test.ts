@@ -117,7 +117,7 @@ describe('双人对词真实 SQLite / Socket.IO 联机', () => {
   async function reveal(host: Player, guest: Player) {
     await play(host, 'submit', '大海');
     await play(guest, 'submit', '沙滩');
-    await waitFor(host, (snapshot) => snapshot.phase === 'revealed');
+    await waitFor(host, (snapshot) => snapshot.phase === 'playing' && snapshot.roundNumber === 2);
   }
 
   it('第二人加入才开始，并拒绝第三人占用同一房间', async () => {
@@ -140,7 +140,7 @@ describe('双人对词真实 SQLite / Socket.IO 联机', () => {
     expect(guest.received.every((snapshot) => !JSON.stringify(snapshot).includes('海风暗号'))).toBe(true);
     expect(guest.snapshot.history).toEqual([]);
     await play(guest, 'submit', '海边的风');
-    expect(guest.snapshot).toMatchObject({ phase: 'revealed', endReason: null });
+    expect(guest.snapshot).toMatchObject({ phase: 'playing', roundNumber: 2, endReason: null });
     expect(guest.snapshot.history).toEqual([{ roundNumber: 1, words: ['海风暗号', '海边的风'] }]);
     expect(JSON.stringify(guest.snapshot)).not.toContain(host.credentials.token);
   });
@@ -171,17 +171,17 @@ describe('双人对词真实 SQLite / Socket.IO 联机', () => {
     expect(guest.snapshot.history[0]?.words).toEqual(['原词', '另一个词']);
   });
 
-  it('双方都确认才进入下一轮，单方举手跨轮保留且无法撤回', async () => {
+  it('不同词语揭晓后自动进入下一轮，单方举手跨轮保留且无法撤回', async () => {
     const { host, guest } = await pair();
     await play(host, 'raise');
     await reveal(host, guest);
-    await play(host, 'next');
-    expect(host.snapshot).toMatchObject({ phase: 'revealed', roundNumber: 1 });
-    expect(host.snapshot.self.nextReady).toBe(true);
-    await play(guest, 'next');
     const snapshot = await waitFor(host, (value) => value.phase === 'playing' && value.roundNumber === 2);
     expect(snapshot.self).toMatchObject({ raised: true, nextReady: false, submitted: false, word: null });
     expect(snapshot.opponent?.submitted).toBe(false);
+    expect(snapshot.history).toEqual([{ roundNumber: 1, words: ['大海', '沙滩'] }]);
+    // Legacy confirmation requests must never skip a fresh round.
+    expect((await request(host.socket, action(host, 'next'))).ok).toBe(false);
+    expect((await request(guest.socket, action(guest, 'next'))).ok).toBe(false);
     const duplicateRaise = await request(host.socket, action(host, 'raise'));
     if (duplicateRaise.ok) expect(duplicateRaise.snapshot.self.raised).toBe(true);
     const resumed = requireSuccess(await request(host.socket, { action: 'resume', ...host.credentials }));
@@ -199,6 +199,33 @@ describe('双人对词真实 SQLite / Socket.IO 联机', () => {
     expect((await request(guest.socket, action(guest, 'submit', '太迟了'))).ok).toBe(false);
   });
 
+  it('已提交的一方离线时仍自动进入下一轮，重连恢复上一轮揭晓与新输入状态', async () => {
+    const { host, guest } = await pair();
+    await play(host, 'submit', '大海');
+    host.socket.disconnect();
+    await waitFor(guest, value => value.opponent?.online === false);
+    await play(guest, 'submit', '沙滩');
+    expect(guest.snapshot).toMatchObject({ phase: 'playing', roundNumber: 2 });
+    expect(guest.snapshot.self).toMatchObject({ submitted: false, word: null });
+    const restored = await enter({ action: 'resume', ...host.credentials });
+    expect(restored.snapshot).toMatchObject({ phase: 'playing', roundNumber: 2 });
+    expect(restored.snapshot.self).toMatchObject({ submitted: false, word: null });
+    expect(restored.snapshot.history).toEqual([{ roundNumber: 1, words: ['大海', '沙滩'] }]);
+  });
+
+  it('自动续轮后到达的同局旧轮举手仍生效，但未来轮举手和旧轮词语不会生效', async () => {
+    const { host, guest } = await pair();
+    await play(host, 'submit', '大海');
+    const delayedRaise = action(host, 'raise');
+    const delayedWord = action(host, 'submit', '迟到的词');
+    await play(guest, 'submit', '沙滩');
+    const raised = requireSuccess(await request(host.socket, delayedRaise));
+    expect(raised.snapshot).toMatchObject({ phase: 'playing', roundNumber: 2, self: { raised: true, submitted: false } });
+    const futureRaise = { ...delayedRaise, roundNumber: 3 };
+    expect((await request(guest.socket, futureRaise)).ok).toBe(false);
+    expect((await request(host.socket, delayedWord)).ok).toBe(false);
+  });
+
   it('双方揭晓后举手结束，保留已揭晓的历史词语', async () => {
     const { host, guest } = await pair();
     await reveal(host, guest);
@@ -212,8 +239,6 @@ describe('双人对词真实 SQLite / Socket.IO 联机', () => {
     const { host, guest } = await pair();
     const stale = action(host, 'submit', '迟到的词');
     await reveal(host, guest);
-    await play(host, 'next');
-    await play(guest, 'next');
     await waitFor(host, (snapshot) => snapshot.roundNumber === 2);
     expect((await request(host.socket, stale)).ok).toBe(false);
     const resumed = requireSuccess(await request(host.socket, { action: 'resume', ...host.credentials }));

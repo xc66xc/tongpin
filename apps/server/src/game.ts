@@ -82,6 +82,9 @@ export class GameService {
       const digest = Buffer.from(hash(token), 'hex');
       const player = this.players(room.id).find(p => timingSafeEqual(Buffer.from(p.token_hash, 'hex'), digest));
       if (!player) throw new GameError('INVALID_TOKEN', '无法恢复你的玩家身份，请使用原来的浏览器。');
+      // Existing rooms may still be waiting for the former manual confirmation.
+      // Resume already runs in a transaction, so the round advances only once.
+      if (room.phase === 'revealed') this.advanceRound(room);
       this.touch(room.id);
       return { roomId: room.id, roomCode: code, seat: player.seat };
     });
@@ -90,13 +93,17 @@ export class GameService {
   apply(identity: Identity, command: GameCommand): void {
     this.db.transaction(() => {
       const room = this.getRoom(identity.roomId);
-      if (command.gameNumber !== room.game_number || command.roundNumber !== room.round_number) throw new GameError('STALE_COMMAND', '游戏进度已更新，请查看最新状态后再操作。');
+      // Raising is irreversible for the whole game, even if another player's
+      // submission advances the round before this request reaches the server.
+      const validRound = command.roundNumber === room.round_number
+        || (command.action === 'raise' && command.roundNumber < room.round_number);
+      if (command.gameNumber !== room.game_number || !validRound) throw new GameError('STALE_COMMAND', '游戏进度已更新，请查看最新状态后再操作。');
       const players = this.players(room.id);
       const self = players.find(p => p.seat === identity.seat);
       if (!self) throw new GameError('UNAUTHORIZED', '玩家身份失效，请重新连接。');
       if (command.action === 'submit') this.submit(room, self, command.word);
       else if (command.action === 'raise') this.raise(room, self);
-      else if (command.action === 'next') this.next(room, self);
+      else if (command.action === 'next') throw new GameError('AUTO_ADVANCE', '已自动进入下一轮，无需再次确认。');
       else this.again(room, self);
       this.touch(room.id);
     });
@@ -118,7 +125,7 @@ export class GameService {
     if (updated.word_one !== null && updated.word_two !== null) {
       this.db.run('UPDATE rounds SET is_revealed = 1, updated_at = ? WHERE id = ?', this.now(), round.id);
       if (updated.word_one === updated.word_two) this.end(room, 'matched');
-      else this.db.run("UPDATE rooms SET phase = 'revealed' WHERE id = ?", room.id);
+      else this.advanceRound(room);
     }
   }
   private raise(room: RoomRow, self: PlayerRow): void {
@@ -130,14 +137,10 @@ export class GameService {
   private end(room: RoomRow, reason: 'matched' | 'consensus'): void {
     this.db.run("UPDATE rooms SET phase = 'ended', end_reason = ? WHERE id = ?", reason, room.id);
   }
-  private next(room: RoomRow, self: PlayerRow): void {
-    if (room.phase !== 'revealed') throw new GameError('INVALID_PHASE', '双方揭晓后才能进入下一轮。');
-    this.db.run('UPDATE players SET is_next_ready = 1, updated_at = ? WHERE id = ?', this.now(), self.id);
-    if (this.players(room.id).every(p => p.is_next_ready === 1)) {
-      this.insertRound(room.id, room.game_number, room.round_number + 1);
-      this.db.run("UPDATE rooms SET phase = 'playing', round_number = round_number + 1 WHERE id = ?", room.id);
-      this.db.run('UPDATE players SET is_next_ready = 0, updated_at = ? WHERE rooms_id = ?', this.now(), room.id);
-    }
+  private advanceRound(room: RoomRow): void {
+    this.insertRound(room.id, room.game_number, room.round_number + 1);
+    this.db.run("UPDATE rooms SET phase = 'playing', round_number = round_number + 1 WHERE id = ?", room.id);
+    this.db.run('UPDATE players SET is_next_ready = 0, updated_at = ? WHERE rooms_id = ?', this.now(), room.id);
   }
   private again(room: RoomRow, self: PlayerRow): void {
     if (room.phase !== 'ended') throw new GameError('INVALID_PHASE', '这一局结束后才能再来一局。');
