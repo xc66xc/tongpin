@@ -1,7 +1,8 @@
 /** 'revealed' is retained for rooms created before automatic advancement. */
 export type Phase = 'waiting' | 'playing' | 'revealed' | 'ended';
 export type EndReason = 'matched' | 'consensus' | null;
-export type Seat = 1 | 2;
+export type Seat = 1 | 2 | 3;
+export interface RoomOptions { playerCount?: 2 | 3; roundSeconds?: number }
 export interface PlayerView {
   seat: Seat;
   online: boolean;
@@ -14,7 +15,8 @@ export interface PlayerView {
 }
 export interface RoundView {
   roundNumber: number;
-  words: [string, string];
+  /** Seat order; null is an unanswered slot, never a matching word. */
+  words: (string | null)[];
 }
 export interface RoomSnapshot {
   roomCode: string;
@@ -24,15 +26,23 @@ export interface RoomSnapshot {
   gameNumber: number;
   roundNumber: number;
   endReason: EndReason;
+  playerCount: 2 | 3;
+  roundSeconds: number;
+  /** Unix milliseconds, null while waiting or ended. */
+  deadlineAt: number | null;
+  serverNow: number;
   self: PlayerView;
+  opponents: PlayerView[];
+  /** Retained for older two-player clients; new clients use opponents. */
   opponent: PlayerView | null;
+  historyCount: number;
   history: RoundView[];
 }
 export interface Credentials { roomCode: string; token: string }
 /** 'next' is a legacy command: the server now advances mismatched rounds itself. */
 export type GameAction = 'submit' | 'next' | 'raise' | 'again';
 export type Command =
-  | { action: 'create' }
+  | ({ action: 'create' } & RoomOptions)
   | { action: 'join'; roomCode: string }
   | { action: 'resume'; roomCode: string; token: string }
   | { action: GameAction; gameNumber: number; roundNumber: number; word?: string };

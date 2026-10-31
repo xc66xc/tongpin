@@ -100,7 +100,7 @@ it('已有无 revision 字段的 SQLite 房间可幂等升级，保留游戏数�
       VALUES(42,'123456','playing',1,1,100,200,999999);
       CREATE TABLE players (
         id INTEGER PRIMARY KEY, rooms_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-        seat INTEGER NOT NULL, token_hash TEXT NOT NULL,
+        seat INTEGER NOT NULL CHECK(seat IN (1,2)), token_hash TEXT NOT NULL,
         is_raised INTEGER NOT NULL DEFAULT 0, is_next_ready INTEGER NOT NULL DEFAULT 0,
         is_rematch_ready INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
         UNIQUE(rooms_id,seat)
@@ -134,11 +134,58 @@ it('已有无 revision 字段的 SQLite 房间可幂等升级，保留游戏数�
         const snapshot = service.snapshot({ roomId: 42, roomCode: '123456', seat: 1 }, () => false);
         expect(snapshot).toMatchObject({ revision: 0, phase: 'playing', gameNumber: 1, roundNumber: 1 });
         expect(snapshot.self).toMatchObject({ word: '保留的词', submitted: true });
+        expect(snapshot).toMatchObject({ playerCount: 2, roundSeconds: 30, deadlineAt: null });
+        expect(migrated.connection.pragma('foreign_key_check')).toEqual([]);
+        expect(migrated.connection.pragma('integrity_check', { simple: true })).toBe('ok');
+        const savedPlayer = migrated.one<{ id: number; token_hash: string; created_at: number; updated_at: number }>(
+          'SELECT id,token_hash,created_at,updated_at FROM players WHERE rooms_id = ?', 42,
+        );
+        expect(savedPlayer).toEqual({ id: 1, token_hash: createHash('sha256').update(token).digest('hex'), created_at: 100, updated_at: 200 });
+        const restored = service.resume('123456', token);
+        expect(service.snapshot(restored, () => true)).toMatchObject({ phase: 'playing', deadlineAt: 31_000 });
+        // The old CHECK(seat IN (1,2)) must actually be replaced, not only the CREATE template.
+        migrated.run('INSERT INTO players(rooms_id,seat,token_hash,created_at,updated_at) VALUES(?,?,?,?,?)', 42, 3, 'b'.repeat(64), 100, 200);
+        expect(() => migrated.run('INSERT INTO players(rooms_id,seat,token_hash,created_at,updated_at) VALUES(?,?,?,?,?)', 42, 4, 'c'.repeat(64), 100, 200)).toThrow();
+        migrated.run('DELETE FROM players WHERE rooms_id = ? AND seat = 3', 42);
+        // Reset only the legacy clock mutation so the second constructor repeats
+        // the same migration assertions against the unchanged original fixture.
+        migrated.run('UPDATE rooms SET revision = 0,updated_at = 200,expires_at = 999999 WHERE id = 42');
+        migrated.run('UPDATE rounds SET deadline_at = NULL WHERE rooms_id = 42');
       } finally {
         migrated.close();
       }
     }
   } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it('三人限时房间重启后保持设置、截止时间和第三位玩家的提交', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'tongpin-timer-restart-'));
+  const path = join(directory, 'game.db');
+  let time = 1_000;
+  let db = new GameDatabase(path);
+  try {
+    let service = new GameService(db, () => time);
+    const host = service.create({ playerCount: 3, roundSeconds: 45 });
+    service.join(host.credentials.roomCode);
+    const third = service.join(host.credentials.roomCode);
+    service.apply(third.identity, { action: 'submit', gameNumber: 1, roundNumber: 1, word: '重启前的词' });
+    db.close();
+    time += 10_000;
+    db = new GameDatabase(path);
+    service = new GameService(db, () => time);
+    const restored = service.resume(third.credentials.roomCode, third.credentials.token);
+    expect(service.snapshot(restored, () => false)).toMatchObject({ playerCount: 3, roundSeconds: 45,
+      deadlineAt: 46_000, roundNumber: 1, self: { seat: 3, word: '重启前的词', submitted: true } });
+    time = 46_000;
+    expect(service.processTimeouts()).toEqual([host.identity.roomId]);
+    const snapshot = service.snapshot(restored, () => false);
+    expect(snapshot).toMatchObject({ roundNumber: 2, deadlineAt: 91_000,
+      history: [{ roundNumber: 1, words: [null, null, '重启前的词'] }] });
+    expect(db.connection.pragma('foreign_key_check')).toEqual([]);
+  } finally {
+    db.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

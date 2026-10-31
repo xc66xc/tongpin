@@ -6,6 +6,7 @@ import type { EndReason, Phase, Seat } from '@tongpin/shared';
 export interface RoomRow {
   id: number; code: string; revision: number; phase: Phase; game_number: number; round_number: number;
   end_reason: EndReason; created_at: number; updated_at: number; expires_at: number;
+  player_count: 2 | 3; round_seconds: number;
 }
 export interface PlayerRow {
   id: number; rooms_id: number; seat: Seat; token_hash: string;
@@ -14,6 +15,7 @@ export interface PlayerRow {
 export interface RoundRow {
   id: number; rooms_id: number; game_number: number; round_number: number;
   word_one: string | null; word_two: string | null; is_revealed: number;
+  word_three: string | null; deadline_at: number | null;
 }
 type Parameter = string | number | null;
 
@@ -64,10 +66,37 @@ export class GameDatabase {
           UNIQUE(rooms_id,game_number,round_number)
         );
       `);
-      const columns = this.connection.pragma('table_info(rooms)') as { name: string }[];
-      if (!columns.some(column => column.name === 'revision')) {
-        this.connection.exec('ALTER TABLE rooms ADD COLUMN revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0)');
-      }
+      this.connection.transaction(() => {
+        const columns = this.connection.pragma('table_info(rooms)') as { name: string }[];
+        if (!columns.some(column => column.name === 'revision')) {
+          this.connection.exec('ALTER TABLE rooms ADD COLUMN revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0)');
+        }
+        if (Number(this.connection.pragma('user_version', { simple: true })) < 1) {
+          this.connection.exec(`
+            ALTER TABLE rooms ADD COLUMN player_count INTEGER NOT NULL DEFAULT 2 CHECK(player_count IN (2,3));
+            ALTER TABLE rooms ADD COLUMN round_seconds INTEGER NOT NULL DEFAULT 30 CHECK(round_seconds BETWEEN 5 AND 3600);
+            ALTER TABLE rounds ADD COLUMN word_three TEXT DEFAULT NULL CHECK(word_three IS NULL OR length(word_three) BETWEEN 1 AND 30);
+            ALTER TABLE rounds ADD COLUMN deadline_at INTEGER DEFAULT NULL;
+            CREATE TABLE players_expanded (
+              id INTEGER PRIMARY KEY,
+              rooms_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+              seat INTEGER NOT NULL CHECK(seat IN (1,2,3)),
+              token_hash TEXT NOT NULL CHECK(length(token_hash) = 64),
+              is_raised INTEGER NOT NULL DEFAULT 0 CHECK(is_raised IN (0,1)),
+              is_next_ready INTEGER NOT NULL DEFAULT 0 CHECK(is_next_ready IN (0,1)),
+              is_rematch_ready INTEGER NOT NULL DEFAULT 0 CHECK(is_rematch_ready IN (0,1)),
+              created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+              UNIQUE(rooms_id,seat)
+            );
+            INSERT INTO players_expanded(id,rooms_id,seat,token_hash,is_raised,is_next_ready,is_rematch_ready,created_at,updated_at)
+              SELECT id,rooms_id,seat,token_hash,is_raised,is_next_ready,is_rematch_ready,created_at,updated_at FROM players;
+            DROP TABLE players;
+            ALTER TABLE players_expanded RENAME TO players;
+            CREATE INDEX rounds_deadline_at ON rounds(deadline_at) WHERE is_revealed = 0 AND deadline_at IS NOT NULL;
+            PRAGMA user_version = 1;
+          `);
+        }
+      }).immediate();
     } catch (error) {
       this.connection.close();
       throw error;

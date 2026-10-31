@@ -1,9 +1,10 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { io, type Socket } from 'socket.io-client';
 import { createApp } from '../apps/server/src/app';
+import { GameService } from '../apps/server/src/game';
 import type {
   ClientEvents, Command, Credentials, GameAction, Reply, RoomSnapshot, ServerEvents,
 } from '../packages/shared/src/index';
@@ -16,7 +17,7 @@ interface Player {
   received: RoomSnapshot[];
 }
 
-describe('双人对词真实 SQLite / Socket.IO 联机', () => {
+describe('多人对词真实 SQLite / Socket.IO 联机', () => {
   let directory: string;
   let app: Awaited<ReturnType<typeof createApp>>;
   let baseUrl: string;
@@ -337,4 +338,98 @@ describe('双人对词真实 SQLite / Socket.IO 联机', () => {
     const nextRoom = requireSuccess(await request(host.socket, { action: 'create' }));
     expect(nextRoom.snapshot.phase).toBe('waiting');
   });
+
+  it('三人联机等待满员，前两份词对第三人保密，第三份提交后一起揭晓', async () => {
+    const host = await enter({ action: 'create', playerCount: 3, roundSeconds: 45 });
+    const second = await enter({ action: 'join', roomCode: host.credentials.roomCode });
+    expect(second.snapshot).toMatchObject({ phase: 'waiting', playerCount: 3, roundSeconds: 45, deadlineAt: null });
+    const third = await enter({ action: 'join', roomCode: host.credentials.roomCode });
+    await waitFor(host, value => value.phase === 'playing');
+    await waitFor(second, value => value.phase === 'playing');
+    expect(third.snapshot.self.seat).toBe(3);
+    await play(host, 'submit', '三人暗号');
+    await play(second, 'submit', '三人暗号');
+    await waitFor(third, value => value.opponents.every(player => player.submitted));
+    expect(third.snapshot.opponents.every(player => player.word === null)).toBe(true);
+    expect(third.received.every(value => !JSON.stringify(value).includes('三人暗号'))).toBe(true);
+    await play(third, 'submit', '另一种答案');
+    const revealed = await waitFor(host, value => value.roundNumber === 2);
+    expect(revealed.history).toEqual([{ roundNumber: 1, words: ['三人暗号', '三人暗号', '另一种答案'] }]);
+    expect(revealed.historyCount).toBe(1);
+    expect(revealed.phase).toBe('playing');
+  });
+
+  it.each([
+    { playerCount: 1 }, { playerCount: 4 }, { roundSeconds: 4 },
+    { roundSeconds: 3601 }, { roundSeconds: 5.5 }, { roundSeconds: '30' },
+  ])('创建房间拒绝非法人数或时间 %j', async settings => {
+    const socket = await connect();
+    const reply = await request(socket, { action: 'create', ...settings } as Command);
+    expect(reply).toMatchObject({ ok: false, error: { code: 'INVALID_INPUT' } });
+  });
+
+  it('定时器向三端广播部分超时与全空续轮，时间内重连不重置截止时间', async () => {
+    await app.close();
+    let time = 1_000;
+    app = await createApp({ dbPath: join(directory, 'game.db'), now: () => time });
+    baseUrl = await app.listen({ port: 0, host: '127.0.0.1' });
+    const host = await enter({ action: 'create', playerCount: 3, roundSeconds: 5 });
+    const second = await enter({ action: 'join', roomCode: host.credentials.roomCode });
+    const third = await enter({ action: 'join', roomCode: host.credentials.roomCode });
+    await waitFor(host, value => value.phase === 'playing');
+    await play(host, 'submit', '及时的答案');
+    time += 2_000;
+    const restored = requireSuccess(await request(third.socket, { action: 'resume', ...third.credentials }));
+    expect(restored.snapshot.deadlineAt).toBe(6_000);
+    time = 6_000;
+    const partial = await Promise.all([host, second, third].map(player => waitFor(player, value => value.roundNumber === 2)));
+    for (const snapshot of partial) {
+      expect(snapshot.history).toEqual([{ roundNumber: 1, words: ['及时的答案', null, null] }]);
+      expect(snapshot.deadlineAt).toBe(11_000);
+    }
+    time = 11_000;
+    const empty = await Promise.all([host, second, third].map(player => waitFor(player, value => value.roundNumber === 3)));
+    for (const snapshot of empty) {
+      expect(snapshot.history.at(-1)).toEqual({ roundNumber: 2, words: [null, null, null] });
+      expect(snapshot.phase).toBe('playing');
+    }
+  });
+
+
+  it('关闭应用时停止截止扫描，不在数据库关闭后继续调用定时任务', async () => {
+    await app.close();
+    const scan = vi.spyOn(GameService.prototype, 'processTimeouts');
+    try {
+      app = await createApp({ dbPath: join(directory, 'game.db'), timeoutIntervalMs: 5 });
+      await app.listen({ port: 0, host: '127.0.0.1' });
+      await vi.waitFor(() => expect(scan).toHaveBeenCalled(), { interval: 5, timeout: 500 });
+      await app.close();
+      const countAtClose = scan.mock.calls.length;
+      await new Promise<void>(resolve => setTimeout(resolve, 30));
+      expect(scan).toHaveBeenCalledTimes(countAtClose);
+    } finally {
+      scan.mockRestore();
+    }
+  });
+
+
+  it('迟到提交触发结算并返回错误时，三端仍收到同一份新轮快照', async () => {
+    await app.close();
+    let time = 1_000;
+    app = await createApp({ dbPath: join(directory, 'game.db'), now: () => time, timeoutIntervalMs: 60_000 });
+    baseUrl = await app.listen({ port: 0, host: '127.0.0.1' });
+    const host = await enter({ action: 'create', playerCount: 3, roundSeconds: 5 });
+    const second = await enter({ action: 'join', roomCode: host.credentials.roomCode });
+    const third = await enter({ action: 'join', roomCode: host.credentials.roomCode });
+    await waitFor(host, value => value.phase === 'playing');
+    const lateCommand = action(host, 'submit', '迟到不能入库');
+    time = 6_000;
+    expect(await request(host.socket, lateCommand)).toMatchObject({ ok: false, error: { code: 'STALE_COMMAND' } });
+    const snapshots = await Promise.all([host, second, third].map(player => waitFor(player, value => value.roundNumber === 2)));
+    for (const snapshot of snapshots) {
+      expect(snapshot.history).toEqual([{ roundNumber: 1, words: [null, null, null] }]);
+      expect(JSON.stringify(snapshot)).not.toContain('迟到不能入库');
+    }
+  });
+
 });

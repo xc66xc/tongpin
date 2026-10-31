@@ -139,7 +139,9 @@ export function useGame() {
       if (requestEpoch === epoch && !disposed) busy.value = false;
     }
   }
-  function createRoom() { return send({ action: 'create' }); }
+  function createRoom(settings: { playerCount: 2 | 3; roundSeconds: number } = { playerCount: 2, roundSeconds: 30 }) {
+    return send({ action: 'create', ...settings });
+  }
   async function joinRoom(code: string) {
     const clean = code.trim();
     if (!/^\d{6}$/.test(clean)) { error.value = '请输入 6 位数字房间码。'; return; }
