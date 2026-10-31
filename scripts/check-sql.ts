@@ -13,7 +13,7 @@ const service = new GameService(db, () => now, 60_000);
 const latencies: number[] = [];
 try {
   for (let room = 0; room < 100; room++) {
-    const host = service.create();
+    const host = service.create({ maxRounds: 1000 });
     const guest = service.join(host.credentials.roomCode);
     for (let round = 1; round <= 20; round++) {
       for (const [identity, action, word] of [
@@ -27,10 +27,10 @@ try {
     }
   }
   const plans = [
-    ['room-code', 'SELECT id,code,revision,phase,game_number,round_number,end_reason,created_at,updated_at,expires_at FROM rooms WHERE code = ?', ['100000']],
+    ['room-code', 'SELECT id,code,revision,phase,game_number,round_number,end_reason,player_count,round_seconds,max_rounds,created_at,updated_at,expires_at FROM rooms WHERE code = ?', ['100000']],
     ['players', 'SELECT id,rooms_id,seat,token_hash,is_raised,is_next_ready,is_rematch_ready FROM players WHERE rooms_id = ? ORDER BY seat', [1]],
-    ['current-round', 'SELECT id,rooms_id,game_number,round_number,word_one,word_two,is_revealed FROM rounds WHERE rooms_id = ? AND game_number = ? AND round_number = ?', [1, 1, 1]],
-    ['history', 'SELECT id,rooms_id,game_number,round_number,word_one,word_two,is_revealed FROM rounds WHERE rooms_id = ? AND game_number = ? AND is_revealed = 1 ORDER BY round_number', [1, 1]],
+    ['current-round', 'SELECT id,rooms_id,game_number,round_number,word_one,word_two,word_three,deadline_at,is_revealed FROM rounds WHERE rooms_id = ? AND game_number = ? AND round_number = ?', [1, 1, 1]],
+    ['history', 'SELECT id,rooms_id,game_number,round_number,word_one,word_two,word_three,deadline_at,is_revealed FROM rounds WHERE rooms_id = ? AND game_number = ? AND is_revealed = 1 ORDER BY round_number DESC LIMIT 100', [1, 1]],
     ['cleanup', 'SELECT id FROM rooms WHERE expires_at <= ? ORDER BY expires_at LIMIT 25', [now]],
   ] as const;
   const executionPlans = plans.map(([name, sql, params]) => ({ name, detail: db.all<{ detail: string }>('EXPLAIN QUERY PLAN ' + sql, ...params).map(row => row.detail) }));

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 const props = defineProps<{ disabled: boolean; initialCode: string; savedRoom: string }>();
-defineEmits<{ create: [settings: { playerCount: 2 | 3; roundSeconds: number }]; join: [code: string] }>();
+defineEmits<{ create: [settings: { playerCount: 2 | 3; roundSeconds: number; maxRounds: number }]; join: [code: string] }>();
 const code = ref(props.initialCode);
 const composing = ref(false);
 const playerCount = ref<2 | 3>(2);
@@ -9,6 +9,10 @@ const duration = ref<number | 'custom'>(30);
 const customSeconds = ref('90');
 const roundSeconds = computed(() => duration.value === 'custom' ? Number(customSeconds.value) : duration.value);
 const validDuration = computed(() => Number.isInteger(roundSeconds.value) && roundSeconds.value >= 5 && roundSeconds.value <= 3600);
+const roundLimit = ref<number | 'custom'>(10);
+const customRounds = ref('30');
+const maxRounds = computed(() => roundLimit.value === 'custom' ? Number(customRounds.value) : roundLimit.value);
+const validRoundLimit = computed(() => Number.isInteger(maxRounds.value) && maxRounds.value >= 1 && maxRounds.value <= 1000);
 </script>
 
 <template>
@@ -19,7 +23,7 @@ const validDuration = computed(() => Number.isInteger(roundSeconds.value) && rou
       <p class="screen-subtitle">每人一个词，直到我们同频。</p>
       <div class="home-mark" aria-hidden="true"><span class="home-mark__token">你</span><span class="home-mark__dots">···</span><span class="home-mark__token home-mark__token--second">我</span></div>
     </div>
-    <form @submit.prevent="validDuration && $emit('create', { playerCount, roundSeconds })">
+    <form @submit.prevent="validDuration && validRoundLimit && $emit('create', { playerCount, roundSeconds, maxRounds })">
       <fieldset class="home-settings" :disabled="disabled">
         <legend class="form-label">房间人数</legend>
         <div class="home-choices"><label v-for="count in ([2, 3] as const)" :key="count" class="home-choice" :class="{ 'home-choice--selected': playerCount === count }"><input v-model="playerCount" type="radio" name="player-count" :value="count">{{ count }} 人</label></div>
@@ -29,7 +33,12 @@ const validDuration = computed(() => Number.isInteger(roundSeconds.value) && rou
         <div class="home-choices home-choices--time"><label v-for="seconds in [30, 45, 60]" :key="seconds" class="home-choice" :class="{ 'home-choice--selected': duration === seconds }"><input v-model="duration" type="radio" name="round-duration" :value="seconds">{{ seconds }}s</label><label class="home-choice" :class="{ 'home-choice--selected': duration === 'custom' }"><input v-model="duration" type="radio" name="round-duration" value="custom">自定义</label></div>
         <template v-if="duration === 'custom'"><label class="form-label" for="custom-seconds">自定义时长（秒）</label><input id="custom-seconds" v-model="customSeconds" class="form-input" type="number" inputmode="numeric" min="5" max="3600" step="1" required aria-describedby="duration-hint" :aria-invalid="!validDuration"><p id="duration-hint" class="form-hint" :class="{ 'form-error': !validDuration }">请输入 5–3600 的整数，每轮到时自动揭晓。</p></template>
       </fieldset>
-      <button class="action-button" :disabled="disabled || !validDuration">创建房间，邀请朋友</button>
+      <fieldset class="home-settings" :disabled="disabled">
+        <legend class="form-label">最大轮次</legend>
+        <div class="home-choices home-choices--rounds"><label v-for="rounds in [10, 20]" :key="rounds" class="home-choice" :class="{ 'home-choice--selected': roundLimit === rounds }"><input v-model="roundLimit" type="radio" name="max-rounds" :value="rounds">{{ rounds }} 轮</label><label class="home-choice" :class="{ 'home-choice--selected': roundLimit === 'custom' }"><input v-model="roundLimit" type="radio" name="max-rounds" value="custom">自定义轮次</label></div>
+        <template v-if="roundLimit === 'custom'"><label class="form-label" for="custom-rounds">自定义轮次（轮）</label><input id="custom-rounds" v-model="customRounds" class="form-input" type="number" inputmode="numeric" min="1" max="1000" step="1" required aria-describedby="round-limit-hint" :aria-invalid="!validRoundLimit"><p id="round-limit-hint" class="form-hint" :class="{ 'form-error': !validRoundLimit }">请输入 1–1000 的整数，达到轮次上限后结束本局。</p></template>
+      </fieldset>
+      <button class="action-button" :disabled="disabled || !validDuration || !validRoundLimit">创建房间，邀请朋友</button>
     </form>
     <hr class="screen-divider">
     <form @submit.prevent="!composing && $emit('join', code)">
@@ -51,6 +60,7 @@ const validDuration = computed(() => Number.isInteger(roundSeconds.value) && rou
 .home-settings { min-width: 0; margin: 0 0 var(--space-5); padding: 0; border: 0; }
 .home-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); margin: var(--space-2) 0; }
 .home-choices--time { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.home-choices--rounds { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.5fr); }
 .home-choice { display: flex; align-items: center; justify-content: center; gap: var(--space-1); min-height: var(--space-12); padding: var(--space-2) var(--space-1); border: 1px solid var(--color-border); border-radius: var(--radius-sm); font-size: var(--text-sm); cursor: pointer; }
 .home-choice--selected { background: var(--color-soft); border-color: var(--color-primary); }
 .home-choice input { margin: 0; accent-color: var(--color-primary); }

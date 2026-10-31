@@ -47,6 +47,7 @@ async function shareLink() {
       <p class="lobby-code__number">{{ formattedCode }}</p>
       <p class="form-hint" role="status">已加入 {{ joinedCount }} / {{ room.playerCount }} 人 · 等待朋友加入</p>
       <p class="form-hint">{{ room.playerCount }} 人模式 · 每轮 {{ room.roundSeconds }} 秒</p>
+      <p class="form-hint">本局最多 {{ room.maxRounds }} 轮</p>
     </div>
     <div class="action-stack lobby-actions">
       <button class="action-button" @click="shareLink">分享邀请链接</button>

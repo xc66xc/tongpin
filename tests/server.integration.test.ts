@@ -362,7 +362,8 @@ describe('多人对词真实 SQLite / Socket.IO 联机', () => {
   it.each([
     { playerCount: 1 }, { playerCount: 4 }, { roundSeconds: 4 },
     { roundSeconds: 3601 }, { roundSeconds: 5.5 }, { roundSeconds: '30' },
-  ])('创建房间拒绝非法人数或时间 %j', async settings => {
+    { maxRounds: 0 }, { maxRounds: -1 }, { maxRounds: 1001 }, { maxRounds: 1.5 }, { maxRounds: '10' },
+  ])('创建房间拒绝非法人数、时间或最大轮次 %j', async settings => {
     const socket = await connect();
     const reply = await request(socket, { action: 'create', ...settings } as Command);
     expect(reply).toMatchObject({ ok: false, error: { code: 'INVALID_INPUT' } });
@@ -430,6 +431,27 @@ describe('多人对词真实 SQLite / Socket.IO 联机', () => {
       expect(snapshot.history).toEqual([{ roundNumber: 1, words: [null, null, null] }]);
       expect(JSON.stringify(snapshot)).not.toContain('迟到不能入库');
     }
+  });
+
+
+  it('联机最后一轮超时以round_limit向双方结束，再次恢复不会偷偷续轮', async () => {
+    await app.close();
+    let time = 1_000;
+    app = await createApp({ dbPath: join(directory, 'game.db'), now: () => time, timeoutIntervalMs: 5 });
+    baseUrl = await app.listen({ port: 0, host: '127.0.0.1' });
+    const host = await enter({ action: 'create', roundSeconds: 5, maxRounds: 1 });
+    const guest = await enter({ action: 'join', roomCode: host.credentials.roomCode });
+    expect(guest.snapshot.maxRounds).toBe(1);
+    await waitFor(host, value => value.phase === 'playing');
+    await play(host, 'submit', '等不到的答案');
+    time = 6_000;
+    const snapshots = await Promise.all([host, guest].map(player => waitFor(player, value => value.phase === 'ended')));
+    for (const snapshot of snapshots) {
+      expect(snapshot).toMatchObject({ endReason: 'round_limit', maxRounds: 1, roundNumber: 1, historyCount: 1, deadlineAt: null });
+      expect(snapshot.history).toEqual([{ roundNumber: 1, words: ['等不到的答案', null] }]);
+    }
+    const restored = requireSuccess(await request(host.socket, { action: 'resume', ...host.credentials }));
+    expect(restored.snapshot).toMatchObject({ phase: 'ended', endReason: 'round_limit', roundNumber: 1 });
   });
 
 });

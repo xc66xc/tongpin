@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto
 import type { Command, Credentials, PlayerView, RoomOptions, RoomSnapshot, Seat } from '@tongpin/shared';
 import { GameDatabase, type PlayerRow, type RoomRow, type RoundRow } from './db.js';
 
-const ROOM_COLUMNS = 'id, code, revision, phase, game_number, round_number, end_reason, player_count, round_seconds, created_at, updated_at, expires_at';
+const ROOM_COLUMNS = 'id, code, revision, phase, game_number, round_number, end_reason, player_count, round_seconds, max_rounds, created_at, updated_at, expires_at';
 const PLAYER_COLUMNS = 'id, rooms_id, seat, token_hash, is_raised, is_next_ready, is_rematch_ready';
 const ROUND_COLUMNS = 'id, rooms_id, game_number, round_number, word_one, word_two, word_three, deadline_at, is_revealed';
 const WORD_COLUMNS = { 1: 'word_one', 2: 'word_two', 3: 'word_three' } as const;
@@ -58,7 +58,9 @@ export class GameService {
   create(options: RoomOptions = {}): { identity: Identity; credentials: Credentials } {
     const count = options.playerCount ?? 2;
     const seconds = options.roundSeconds ?? 30;
+    const maxRounds = options.maxRounds ?? 10;
     if (![2, 3].includes(count) || !Number.isInteger(seconds) || seconds < 5 || seconds > 3600) throw new GameError('INVALID_INPUT', '请选择 2 或 3 人，每轮时间为 5–3600 秒整数。');
+    if (!Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > 1000) throw new GameError('INVALID_INPUT', '最大轮次请输入 1–1000 的整数。');
     return this.db.transaction(() => {
       let code = '';
       for (let attempt = 0; attempt < 20; attempt++) {
@@ -68,7 +70,7 @@ export class GameService {
       }
       if (!code) throw new GameError('ROOM_LIMIT', '暂时无法创建房间，请稍后重试。');
       const now = this.now();
-      const result = this.db.run('INSERT INTO rooms(code,player_count,round_seconds,created_at,updated_at,expires_at) VALUES (?,?,?,?,?,?)', code, count, seconds, now, now, now + this.ttlMs);
+      const result = this.db.run('INSERT INTO rooms(code,player_count,round_seconds,max_rounds,created_at,updated_at,expires_at) VALUES (?,?,?,?,?,?,?)', code, count, seconds, maxRounds, now, now, now + this.ttlMs);
       const roomId = Number(result.lastInsertRowid);
       const token = randomBytes(32).toString('hex');
       this.insertPlayer(roomId, 1, token);
@@ -153,11 +155,17 @@ export class GameService {
     this.db.run('UPDATE players SET is_raised = 1, updated_at = ? WHERE id = ?', this.now(), self.id);
     if (this.players(room.id).every(p => p.is_raised === 1)) this.end(room, 'consensus');
   }
-  private end(room: RoomRow, reason: 'matched' | 'consensus'): void {
-    this.db.run("UPDATE rooms SET phase = 'ended', end_reason = ? WHERE id = ?", reason, room.id);
+  private end(room: RoomRow, reason: 'matched' | 'consensus' | 'round_limit'): void {
+    // Preserve the deployed parent-table CHECK without rebuilding rooms and
+    // its foreign-key children. Only ended + NULL means round_limit on wire.
+    this.db.run("UPDATE rooms SET phase = 'ended', end_reason = ? WHERE id = ?", reason === 'round_limit' ? null : reason, room.id);
     this.db.run('UPDATE rounds SET deadline_at = NULL WHERE rooms_id = ? AND game_number = ? AND round_number = ?', room.id, room.game_number, room.round_number);
   }
   private advanceRound(room: RoomRow): void {
+    if (room.round_number >= room.max_rounds) {
+      this.end(room, 'round_limit');
+      return;
+    }
     this.insertRound(room.id, room.game_number, room.round_number + 1, room.round_seconds);
     this.db.run("UPDATE rooms SET phase = 'playing', round_number = round_number + 1 WHERE id = ?", room.id);
     this.db.run('UPDATE players SET is_next_ready = 0, updated_at = ? WHERE rooms_id = ?', this.now(), room.id);
@@ -223,7 +231,8 @@ export class GameService {
     const opponents = players.filter(p => p.seat !== identity.seat).map(view);
     const history = this.db.all<RoundRow>(`SELECT ${ROUND_COLUMNS} FROM rounds WHERE rooms_id = ? AND game_number = ? AND is_revealed = 1 ORDER BY round_number DESC LIMIT 100`, room.id, room.game_number).reverse();
     return { roomCode: room.code, revision: room.revision, phase: room.phase, gameNumber: room.game_number, roundNumber: room.round_number,
-      endReason: room.end_reason, playerCount: room.player_count, roundSeconds: room.round_seconds,
+      endReason: room.phase === 'ended' && room.end_reason === null ? 'round_limit' : room.end_reason,
+      playerCount: room.player_count, roundSeconds: room.round_seconds, maxRounds: room.max_rounds,
       deadlineAt: room.phase === 'playing' ? current.deadline_at : null, serverNow: this.now(),
       self: view(self), opponents, opponent: opponents[0] ?? null,
       historyCount: room.round_number - 1 + current.is_revealed,

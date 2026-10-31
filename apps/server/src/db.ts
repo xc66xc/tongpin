@@ -5,8 +5,9 @@ import type { EndReason, Phase, Seat } from '@tongpin/shared';
 
 export interface RoomRow {
   id: number; code: string; revision: number; phase: Phase; game_number: number; round_number: number;
-  end_reason: EndReason; created_at: number; updated_at: number; expires_at: number;
-  player_count: 2 | 3; round_seconds: number;
+  /** Legacy CHECK is preserved: ended + NULL encodes round-limit exhaustion. */
+  end_reason: Exclude<EndReason, 'round_limit'>; created_at: number; updated_at: number; expires_at: number;
+  player_count: 2 | 3; round_seconds: number; max_rounds: number;
 }
 export interface PlayerRow {
   id: number; rooms_id: number; seat: Seat; token_hash: string;
@@ -94,6 +95,13 @@ export class GameDatabase {
             ALTER TABLE players_expanded RENAME TO players;
             CREATE INDEX rounds_deadline_at ON rounds(deadline_at) WHERE is_revealed = 0 AND deadline_at IS NOT NULL;
             PRAGMA user_version = 1;
+          `);
+        }
+        if (Number(this.connection.pragma('user_version', { simple: true })) < 2) {
+          this.connection.exec(`
+            ALTER TABLE rooms ADD COLUMN max_rounds INTEGER NOT NULL DEFAULT 10 CHECK(max_rounds >= 1);
+            UPDATE rooms SET max_rounds = MAX(10, round_number);
+            PRAGMA user_version = 2;
           `);
         }
       }).immediate();

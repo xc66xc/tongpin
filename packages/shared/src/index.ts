@@ -1,8 +1,8 @@
 /** 'revealed' is retained for rooms created before automatic advancement. */
 export type Phase = 'waiting' | 'playing' | 'revealed' | 'ended';
-export type EndReason = 'matched' | 'consensus' | null;
+export type EndReason = 'matched' | 'consensus' | 'round_limit' | null;
 export type Seat = 1 | 2 | 3;
-export interface RoomOptions { playerCount?: 2 | 3; roundSeconds?: number }
+export interface RoomOptions { playerCount?: 2 | 3; roundSeconds?: number; maxRounds?: number }
 export interface PlayerView {
   seat: Seat;
   online: boolean;
@@ -28,6 +28,7 @@ export interface RoomSnapshot {
   endReason: EndReason;
   playerCount: 2 | 3;
   roundSeconds: number;
+  maxRounds: number;
   /** Unix milliseconds, null while waiting or ended. */
   deadlineAt: number | null;
   serverNow: number;

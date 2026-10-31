@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { io, type Socket } from 'socket.io-client';
-import type { ClientEvents, Command, Credentials, GameAction, Reply, RoomSnapshot, ServerEvents } from '@tongpin/shared';
+import type { ClientEvents, Command, Credentials, GameAction, Reply, RoomOptions, RoomSnapshot, ServerEvents } from '@tongpin/shared';
 
 const CREDENTIALS_KEY = 'tongpin.credentials.v1';
 const CURRENT_KEY = 'tongpin.current-room.v1';
@@ -139,8 +139,8 @@ export function useGame() {
       if (requestEpoch === epoch && !disposed) busy.value = false;
     }
   }
-  function createRoom(settings: { playerCount: 2 | 3; roundSeconds: number } = { playerCount: 2, roundSeconds: 30 }) {
-    return send({ action: 'create', ...settings });
+  function createRoom(settings: RoomOptions = {}) {
+    return send({ action: 'create', playerCount: settings.playerCount ?? 2, roundSeconds: settings.roundSeconds ?? 30, maxRounds: settings.maxRounds ?? 10 });
   }
   async function joinRoom(code: string) {
     const clean = code.trim();
