@@ -22,7 +22,7 @@ function submitWord(word: string) {
 
 <template>
   <section>
-    <div class="game-round"><span class="game-round__label">第 {{ String(room.roundNumber).padStart(2, '0') }} 轮</span><span class="game-round__online">{{ onlineText }}</span></div>
+    <div class="game-round"><div class="game-round__progress"><span class="game-round__label">第 {{ String(room.roundNumber).padStart(2, '0') }} 轮</span><span class="app-caption">最多 {{ room.maxRounds }} 轮</span></div><span class="game-round__online">{{ onlineText }}</span></div>
     <h1 class="screen-heading" tabindex="-1">这次，你想到了什么？</h1>
     <p class="screen-subtitle">{{ room.roundNumber === 1 ? '随意想一个词，看看彼此的起点。' : '沿着上一轮的词语，继续联想。' }}</p>
     <div class="game-clock" :class="{ 'game-clock--urgent': secondsLeft !== null && secondsLeft <= 10 }"><span role="timer" aria-label="本轮剩余时间" aria-live="off">{{ secondsLeft === null ? '正在同步时间' : `剩余 ${secondsLeft}s` }}</span><span class="app-caption">每轮 {{ room.roundSeconds }} 秒 · 到时自动揭晓</span></div>
@@ -47,6 +47,7 @@ function submitWord(word: string) {
 
 <style scoped>
 .game-round { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); margin-bottom: var(--space-5); }
+.game-round__progress { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .game-round__label { font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .game-round__online { color: var(--color-primary); font-size: var(--text-xs); text-align: right; }
 .game-clock { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-3) 0; margin-bottom: var(--space-5); border-block: 1px solid var(--color-border); font-size: var(--text-lg); font-variant-numeric: tabular-nums; }

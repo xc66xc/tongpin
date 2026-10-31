@@ -288,3 +288,77 @@ test('自定义5秒到时显示未作答并自动续轮，全员未提交也继�
     await guestContext.close();
   }
 });
+
+test('自定义1轮未同词时显示鼓励结果，全员准备重开后仍可同词成功', async ({ page, browser }, testInfo) => {
+  await page.setViewportSize({ width: 320, height: 740 });
+  await page.goto('./');
+  await expect(page.getByRole('radio', { name: '10 轮', exact: true })).toBeChecked();
+  await page.getByRole('radio', { name: '20 轮', exact: true }).check();
+  await expect(page.getByRole('radio', { name: '20 轮', exact: true })).toBeChecked();
+  await page.getByRole('radio', { name: '自定义轮次', exact: true }).check();
+  const rounds = page.getByRole('spinbutton', { name: /自定义.*轮次/ });
+  const create = page.getByRole('button', { name: '创建房间，邀请朋友' });
+  for (const invalid of ['0', '1001', '1.5']) {
+    await rounds.fill(invalid);
+    await expect(create).toBeDisabled();
+  }
+  await rounds.fill('1');
+  await expect(create).toBeEnabled();
+  await expectNoHorizontalOverflow(page);
+  await create.click();
+  await expect(page.getByText(/最多\s*1\s*轮/)).toBeVisible();
+  const invitation = await page.getByLabel('邀请链接', { exact: true }).inputValue();
+  const guestContext = await browser.newContext({ ...devices['iPhone 13'], baseURL });
+  try {
+    const guest = await guestContext.newPage();
+    await guest.goto(invitation);
+    await guest.getByRole('button', { name: '加入房间', exact: true }).click();
+    await submitWord(page, '大海');
+    await submitWord(guest, '沙滩');
+    for (const player of [page, guest]) {
+      await expect(player.getByRole('heading', { name: '大家的默契还需要再加强一下' })).toBeVisible();
+      await expect(player.getByText('加油，下一局会更有默契！💪')).toBeVisible();
+      await expect(player.getByLabel('你的词', { exact: true })).toHaveCount(0);
+      await expectNoHorizontalOverflow(player);
+    }
+    await page.screenshot({ path: testInfo.outputPath('round-limit-320px.png'), fullPage: true });
+    await page.reload();
+    await expect(page.getByRole('heading', { name: '大家的默契还需要再加强一下' })).toBeVisible();
+    await page.getByRole('button', { name: '再来一局', exact: true }).click();
+    await expect(page.getByRole('button', { name: '已准备，等待对方' })).toBeDisabled();
+    await guest.getByRole('button', { name: '再来一局', exact: true }).click();
+    await expect(page.getByText(/最多\s*1\s*轮/)).toBeVisible();
+    await submitWord(page, '海风');
+    await submitWord(guest, '海风');
+    for (const player of [page, guest]) await expect(player.getByText('同词成功 · 完成 1 轮对词')).toBeVisible();
+  } finally {
+    await guestContext.close();
+  }
+});
+
+test('自定义1轮5秒全员未作答也结束，刷新保留轮次耗尽结果', async ({ page, browser }, testInfo) => {
+  await page.goto('./');
+  await page.getByRole('radio', { name: '自定义', exact: true }).check();
+  await page.getByLabel('自定义时长（秒）', { exact: true }).fill('5');
+  await page.getByRole('radio', { name: '自定义轮次', exact: true }).check();
+  await page.getByRole('spinbutton', { name: /自定义.*轮次/ }).fill('1');
+  await page.getByRole('button', { name: '创建房间，邀请朋友' }).click();
+  const invitation = await page.getByLabel('邀请链接', { exact: true }).inputValue();
+  const guestContext = await browser.newContext({ ...devices['iPhone 13'], baseURL });
+  try {
+    const guest = await guestContext.newPage();
+    await guest.goto(invitation);
+    await guest.getByRole('button', { name: '加入房间', exact: true }).click();
+    for (const player of [page, guest]) {
+      await expect(player.getByRole('heading', { name: '大家的默契还需要再加强一下' })).toBeVisible();
+      await expect(player.getByText('未作答', { exact: true }).first()).toBeVisible();
+      await expect(player.getByText('第 02 轮', { exact: true })).toHaveCount(0);
+      await expect(player.getByLabel('你的词', { exact: true })).toHaveCount(0);
+    }
+    await page.screenshot({ path: testInfo.outputPath('round-limit-timeout-mobile.png'), fullPage: true });
+    await guest.reload();
+    await expect(guest.getByRole('heading', { name: '大家的默契还需要再加强一下' })).toBeVisible();
+  } finally {
+    await guestContext.close();
+  }
+});

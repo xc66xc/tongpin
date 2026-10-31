@@ -15,8 +15,8 @@ describe('多人限时作答与服务器截止时间', () => {
   });
   afterEach(() => db.close());
 
-  function room(playerCount: 2 | 3 = 3, roundSeconds = 5) {
-    const host = game.create({ playerCount, roundSeconds });
+  function room(playerCount: 2 | 3 = 3, roundSeconds = 5, maxRounds = 10) {
+    const host = game.create({ playerCount, roundSeconds, maxRounds });
     const people = [host];
     for (let index = 1; index < playerCount; index++) people.push(game.join(host.credentials.roomCode));
     return people;
@@ -159,7 +159,7 @@ describe('多人限时作答与服务器截止时间', () => {
   });
 
   it('历史快照只返回最近100轮，但总轮数与原始记录保留', () => {
-    const players = room();
+    const players = room(3, 5, 1000);
     for (let index = 0; index < 105; index++) {
       now += 5_000;
       game.processTimeouts();

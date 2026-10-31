@@ -18,7 +18,7 @@ type GameSocket = Socket<ClientEvents, ServerEvents, Record<string, never>, Sock
 const roomCode = z.string().regex(/^\d{6}$/);
 const progress = { gameNumber: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), roundNumber: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) };
 const commandSchema = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('create'), playerCount: z.union([z.literal(2), z.literal(3)]).optional(), roundSeconds: z.number().int().min(5).max(3600).optional() }).strict(),
+  z.object({ action: z.literal('create'), playerCount: z.union([z.literal(2), z.literal(3)]).optional(), roundSeconds: z.number().int().min(5).max(3600).optional(), maxRounds: z.number().int().min(1).max(1000).optional() }).strict(),
   z.object({ action: z.literal('join'), roomCode }).strict(),
   z.object({ action: z.literal('resume'), roomCode, token: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
   z.object({ action: z.literal('submit'), ...progress, word: z.string().max(120) }).strict(),
@@ -159,8 +159,8 @@ export async function createApp(options: AppOptions) {
       for (const roomId of changed) {
         try {
           broadcast(roomId);
-          const state = db.one<{ game_number: number; round_number: number }>('SELECT game_number,round_number FROM rooms WHERE id = ?', roomId);
-          app.log.info({ tag: 'room.round_timeout', roomId, gameNumber: state?.game_number, roundNumber: state?.round_number }, 'Timed-out round revealed and advanced');
+          const state = db.one<{ phase: string; game_number: number; round_number: number }>('SELECT phase,game_number,round_number FROM rooms WHERE id = ?', roomId);
+          app.log.info({ tag: 'room.round_timeout', roomId, phase: state?.phase, gameNumber: state?.game_number, roundNumber: state?.round_number }, 'Timed-out round revealed and settled');
         } catch (error) { app.log.error({ err: error, tag: '[error]', operation: 'room.round_timeout.broadcast', roomId }, 'Timeout state broadcast failed'); }
       }
     } catch (error) { app.log.error({ err: error, tag: '[error]', operation: 'room.round_timeout.scan' }, 'Timeout scan failed'); }
