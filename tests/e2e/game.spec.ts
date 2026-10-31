@@ -18,7 +18,7 @@ async function createPair(browser: Browser, host: Page): Promise<{ guest: Page; 
 
 async function submitWord(page: Page, word: string) {
   await page.getByLabel('你的词', { exact: true }).fill(word);
-  await page.getByRole('button', { name: '提交，等对方揭晓' }).click();
+  await page.getByRole('button', { name: /^提交，/ }).click();
 }
 
 async function expectNoHorizontalOverflow(page: Page) {
@@ -201,6 +201,89 @@ test('结束快照先于旧操作确认到达时，界面仍保持结束状态',
     await expect(page.getByText('正在同步…', { exact: true })).toHaveCount(0);
     await expect(page.getByText('双方举手，确认同频 · 完成 1 轮对词')).toBeVisible();
     await expect(guest.getByText('双方举手，确认同频 · 完成 1 轮对词')).toBeVisible();
+  } finally {
+    await guestContext.close();
+  }
+});
+
+test('三部手机选择45秒，等第三人加入才开局，并要求全员同词及全员举手', async ({ page, browser }, testInfo) => {
+  await page.setViewportSize({ width: 320, height: 740 });
+  await page.goto('./');
+  await expect(page.getByRole('radio', { name: '2 人', exact: true })).toBeChecked();
+  await expect(page.getByRole('radio', { name: '30s', exact: true })).toBeChecked();
+  await page.getByRole('radio', { name: '3 人', exact: true }).check();
+  await page.getByRole('radio', { name: '45s', exact: true }).check();
+  await expectNoHorizontalOverflow(page);
+  await page.getByRole('button', { name: '创建房间，邀请朋友' }).click();
+  const invitation = await page.getByLabel('邀请链接', { exact: true }).inputValue();
+  const contexts = await Promise.all([0, 1].map(() => browser.newContext({ ...devices['iPhone 13'], baseURL })));
+  try {
+    const second = await contexts[0].newPage();
+    const third = await contexts[1].newPage();
+    await second.goto(invitation);
+    await second.getByRole('button', { name: '加入房间', exact: true }).click();
+    await expect(second.getByRole('heading', { name: '把朋友叫来吧。' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '把朋友叫来吧。' })).toBeVisible();
+    await third.goto(invitation);
+    await third.getByRole('button', { name: '加入房间', exact: true }).click();
+    for (const player of [page, second, third]) await expect(player.getByLabel('你的词', { exact: true })).toBeVisible();
+    await submitWord(page, '三人暗号');
+    await submitWord(second, '三人暗号');
+    await expect(third.getByText('三人暗号', { exact: true })).toHaveCount(0);
+    await expect(third.getByLabel('你的词', { exact: true })).toBeVisible();
+    await submitWord(third, '三人暗号');
+    for (const player of [page, second, third]) {
+      await expect(player.getByText('同词成功 · 完成 1 轮对词')).toBeVisible();
+      await expectNoHorizontalOverflow(player);
+    }
+    await page.screenshot({ path: testInfo.outputPath('three-player-result-320px.png'), fullPage: true });
+    await page.getByRole('button', { name: '再来一局', exact: true }).click();
+    await second.getByRole('button', { name: '再来一局', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '原来，我们想的一样。' })).toBeVisible();
+    await third.getByRole('button', { name: '再来一局', exact: true }).click();
+    for (const player of [page, second, third]) await expect(player.getByLabel('你的词', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '举手结束', exact: true }).click();
+    await second.getByRole('button', { name: /^举手结束/ }).click();
+    await expect(third.getByLabel('你的词', { exact: true })).toBeVisible();
+    await third.getByRole('button', { name: /^举手结束/ }).click();
+    for (const player of [page, second, third]) await expect(player.getByRole('heading', { name: '原来，我们想的一样。' })).toBeVisible();
+  } finally {
+    for (const context of contexts) await context.close();
+  }
+});
+
+test('自定义5秒到时显示未作答并自动续轮，全员未提交也继续', async ({ page, browser }, testInfo) => {
+  await page.goto('./');
+  await page.getByRole('radio', { name: '自定义', exact: true }).check();
+  const duration = page.getByLabel('自定义时长（秒）', { exact: true });
+  const create = page.getByRole('button', { name: '创建房间，邀请朋友' });
+  await duration.fill('4');
+  await expect(create).toBeDisabled();
+  await duration.fill('5.5');
+  await expect(create).toBeDisabled();
+  await duration.fill('5');
+  await expect(create).toBeEnabled();
+  await create.click();
+  const invitation = await page.getByLabel('邀请链接', { exact: true }).inputValue();
+  const guestContext = await browser.newContext({ ...devices['iPhone 13'], baseURL });
+  try {
+    const guest = await guestContext.newPage();
+    await guest.goto(invitation);
+    await guest.getByRole('button', { name: '加入房间', exact: true }).click();
+    await submitWord(page, '已输入的词');
+    await expect(guest.getByText('已输入的词', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('第 02 轮', { exact: true })).toBeVisible();
+    await expect(guest.getByText('第 02 轮', { exact: true })).toBeVisible();
+    await expect(page.getByText('未作答', { exact: true }).first()).toBeVisible();
+    await expect(guest.getByText('未作答', { exact: true }).first()).toBeVisible();
+    await expect(page.getByLabel('你的词', { exact: true })).toBeEnabled();
+    await page.screenshot({ path: testInfo.outputPath('timed-out-mobile.png'), fullPage: true });
+    await expect(page.getByText('第 03 轮', { exact: true })).toBeVisible();
+    await expect(guest.getByText('第 03 轮', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '继续下一轮', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: '举手结束', exact: true }).click();
+    await guest.getByRole('button', { name: /^举手结束/ }).click();
+    await expect(page.getByRole('heading', { name: '原来，我们想的一样。' })).toBeVisible();
   } finally {
     await guestContext.close();
   }

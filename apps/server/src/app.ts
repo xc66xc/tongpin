@@ -11,14 +11,14 @@ import { GameError, GameService, type Identity } from './game.js';
 
 interface AppOptions {
   dbPath: string; logger?: boolean; now?: () => number; ttlMs?: number;
-  cleanupIntervalMs?: number; webRoot?: string; allowedOrigin?: string;
+  cleanupIntervalMs?: number; timeoutIntervalMs?: number; webRoot?: string; allowedOrigin?: string;
 }
 interface SocketData { identity?: Identity; count: number; windowStart: number }
 type GameSocket = Socket<ClientEvents, ServerEvents, Record<string, never>, SocketData>;
 const roomCode = z.string().regex(/^\d{6}$/);
 const progress = { gameNumber: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), roundNumber: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) };
 const commandSchema = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('create') }).strict(),
+  z.object({ action: z.literal('create'), playerCount: z.union([z.literal(2), z.literal(3)]).optional(), roundSeconds: z.number().int().min(5).max(3600).optional() }).strict(),
   z.object({ action: z.literal('join'), roomCode }).strict(),
   z.object({ action: z.literal('resume'), roomCode, token: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
   z.object({ action: z.literal('submit'), ...progress, word: z.string().max(120) }).strict(),
@@ -110,7 +110,7 @@ export async function createApp(options: AppOptions) {
           let limit = entranceLimits.get(ip);
           if (!limit || now - limit.start >= 60_000) { limit = { start: now, count: 0 }; entranceLimits.set(ip, limit); }
           if (++limit.count > 120) throw new GameError('RATE_LIMIT', '创建或加入太频繁，请稍后重试。');
-          const result = command.action === 'create' ? game.create() : game.join(command.roomCode);
+          const result = command.action === 'create' ? game.create(command) : game.join(command.roomCode);
           bind(socket, result.identity); credentials = result.credentials;
         } else if (command.action === 'resume') {
           bind(socket, game.resume(command.roomCode, command.token));
@@ -125,7 +125,14 @@ export async function createApp(options: AppOptions) {
         acknowledge({ ok: true, snapshot, ...(credentials ? { credentials } : {}) });
         broadcast(identity.roomId);
         app.log.info({ tag: 'game.command', action: command.action, roomId: identity.roomId, seat: identity.seat, phase: snapshot.phase, roundNumber: snapshot.roundNumber }, 'Game command accepted');
-      } catch (error) { acknowledge(errorReply(error, socket)); }
+      } catch (error) {
+        acknowledge(errorReply(error, socket));
+        // A rejected late submit may have committed the timeout first.
+        if (socket.data.identity) {
+          try { broadcast(socket.data.identity.roomId); }
+          catch (broadcastError) { app.log.error({ err: broadcastError, tag: '[error]', roomId: socket.data.identity.roomId }, 'Rejected command state broadcast failed'); }
+        }
+      }
     });
     socket.on('disconnect', () => {
       try { unbind(socket); }
@@ -144,8 +151,25 @@ export async function createApp(options: AppOptions) {
   }, options.cleanupIntervalMs ?? 60_000);
   cleanup.unref();
 
+  const timeouts = setInterval(() => {
+    try {
+      const changed = game.processTimeouts((error, roomId) => {
+        app.log.error({ err: error, tag: '[error]', operation: 'room.round_timeout', roomId }, 'Room timeout failed');
+      });
+      for (const roomId of changed) {
+        try {
+          broadcast(roomId);
+          const state = db.one<{ game_number: number; round_number: number }>('SELECT game_number,round_number FROM rooms WHERE id = ?', roomId);
+          app.log.info({ tag: 'room.round_timeout', roomId, gameNumber: state?.game_number, roundNumber: state?.round_number }, 'Timed-out round revealed and advanced');
+        } catch (error) { app.log.error({ err: error, tag: '[error]', operation: 'room.round_timeout.broadcast', roomId }, 'Timeout state broadcast failed'); }
+      }
+    } catch (error) { app.log.error({ err: error, tag: '[error]', operation: 'room.round_timeout.scan' }, 'Timeout scan failed'); }
+  }, options.timeoutIntervalMs ?? 500);
+  timeouts.unref();
+
   app.addHook('preClose', async () => {
     clearInterval(cleanup);
+    clearInterval(timeouts);
     await new Promise<void>(resolveClose => { io.close(() => resolveClose()); });
   });
   app.addHook('onClose', async () => { groups.clear(); entranceLimits.clear(); db.close(); });

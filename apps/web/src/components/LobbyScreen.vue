@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-const props = defineProps<{ roomCode: string }>();
+import type { RoomSnapshot } from '@tongpin/shared';
+const props = defineProps<{ room: RoomSnapshot }>();
 defineEmits<{ home: [] }>();
-const note = ref('朋友加入后，自动开始。');
+const note = ref('人数齐了，自动开始计时。');
 const linkInput = ref<HTMLInputElement | null>(null);
 const inviteLink = computed(() => {
   const url = new URL(window.location.origin + window.location.pathname);
-  url.searchParams.set('room', props.roomCode);
+  url.searchParams.set('room', props.room.roomCode);
   return url.toString();
 });
-const formattedCode = computed(() => props.roomCode.slice(0, 3) + ' ' + props.roomCode.slice(3));
+const formattedCode = computed(() => props.room.roomCode.slice(0, 3) + ' ' + props.room.roomCode.slice(3));
+const joinedCount = computed(() => props.room.opponents.length + 1);
 async function copyLink() {
   try {
     if (!navigator.clipboard) throw new Error('Clipboard unavailable');
@@ -36,14 +38,15 @@ async function shareLink() {
 <template>
   <section>
     <div class="screen-intro">
-      <p class="screen-eyebrow">留一个位置，等你来</p>
+      <p class="screen-eyebrow">留好位置，等你来</p>
       <h1 class="screen-heading" tabindex="-1">把朋友叫来吧。</h1>
       <p class="screen-subtitle">分享房间码，或直接发送邀请链接。</p>
     </div>
     <div class="lobby-code">
       <p class="app-caption">房间码</p>
       <p class="lobby-code__number">{{ formattedCode }}</p>
-      <p class="form-hint">你已就位 · 等待朋友加入</p>
+      <p class="form-hint" role="status">已加入 {{ joinedCount }} / {{ room.playerCount }} 人 · 等待朋友加入</p>
+      <p class="form-hint">{{ room.playerCount }} 人模式 · 每轮 {{ room.roundSeconds }} 秒</p>
     </div>
     <div class="action-stack lobby-actions">
       <button class="action-button" @click="shareLink">分享邀请链接</button>
